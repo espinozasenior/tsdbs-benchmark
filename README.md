@@ -39,12 +39,24 @@ https://github.com/apache/cassandra
 https://github.com/Anant/awesome-cassandra
 https://cassandra.link/post/advanced-time-series-with-cassandra
 https://cassandra.link/post/apache-cassandra-data-partitioning
-https://www.timescale.com/blog/cassandra-vs-timescaledb
 https://www.ksolves.com/blog/big-data/optimizing-cassandra-for-time-series-data
 
 **Docker deployment**
 ```bash
 docker run --name cassandra -d -e CASSANDRA_BROADCAST_ADDRESS=127.0.0.1 -p 9042:9042 cassandra:latest
+```
+
+## TimeScaleDB
+TimescaleDB is an open source time-series database optimized for fast, scalable querying and analytical processing of time-series data. It extends the PostgreSQL database, adding functionality specifically for time-series data, while maintaining the familiar SQL query language and user interface.
+htScaleDB
+
+https://docs.timescale.com/getting-started/latest/services/
+https://www.timescale.com/blog/cassandra-vs-timescaledb
+https://github.com/timescale/timescaledb
+
+
+```bash
+docker run -d --name timescaledb -p 5432:5432 -e POSTGRES_PASSWORD=password timescale/timescaledb-ha:pg17
 ```
 
 
@@ -123,25 +135,19 @@ We are choosing **QuestDB, DuckDB, Cassandra and StarRocks**. Following the next
 **Amazon type t2.2xlarge: 32 RAM - 8vcpu**
 We have build a **[Python script](https://github.com/espinozasenior/tsdbs-benchmark)** to write and query 10 millions of rows in my local computer to test how complex is the installation, connection and query building.
 
-![image.png](attachment:e755a6e1-43fd-4591-86bd-e2d5a7ac194a:image.png)
+## 🔄 Comparative: DuckDB, StarRocks, Cassandra, QuestDB, TimescaleDB
 
-| **Database** | **Type** | **API - Tools - Access Methods** | **Language** | **Queries** | **Distributed system compatibility** | **Deployment** | **Horizontal Scalability** | **Real-time reads** | **Real-time writes** |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| **QuestDB** | Time Series DBMS | [Grafana-native plugin](https://questdb.io/docs/third-party-tools/grafana/)
-[Webview](https://demo.questdb.io/index.html)
-API REST for bulk imports and exports | Java (low latency, zero-GC), C++ | SQL | Good with Kafka, Flink, Spark | EASY | YES (high ingestion, single-node or cluster) | Excelent low-latency |  |
-| **InfluxDB** | Time Series DBMS | HTTP API (including InfluxDB Line Protocol), JSON over UDP | Go | InfluxQL Flux | Good with Kafka, Flink, Spark, Prometeo, Grafana | N/A |  |  |  |
-| **DuckDB** | OLAP embbebided  | DuckDB-Wasm
-Pandas direct integration
- | C++ | SQL | Not Sure | VERY EASY | NO (local) | Very fast |  |
-| **StarRocks** | OLAP (Apache Doris fork) distributed | Data lakes integrations
-
-Kafka
-S3 / GCS / HDFS
-
-BI: Superset, Power BI, Grafana | C++
-Java | SQL (MYSQL connector) vectorized | Good | EASY | YES | Very fast |  |
-| **Cassandra** | 
-General - Popular for Time Series | SDK | Java | CQL | Good for distributed systems, disponibility and fault-tolerance approach  | MEDIUM
-
-(need nodes and some config for time serie optimization) | YES (Very high) | Medium |  |
+| **Criteria** | **DuckDB** | **StarRocks** | **Cassandra** | **QuestDB** | **TimescaleDB** |
+| --- | --- | --- | --- | --- | --- |
+| **Database Type** | Embedded OLAP | Distributed OLAP | Distributed NoSQL | Native Time-Series DB | Time-Series DB on RDBMS |
+| **Core Engine** | C++ | C++ | Java | Java + C | PostgreSQL (C) |
+| **Full SQL Support** | ✅ Yes | ✅ Yes | ⚠️ Partial (CQL) | ✅ Yes (Extended) | ✅ Yes (PostgreSQL-based) |
+| **Real-Time Write Performance** | ⚠️ Limited | ✅ Yes | ✅ Yes | ✅ Excellent | ✅ Yes |
+| **Read Performance** | ✅ Excellent | ✅ Excellent | ⚠️ Moderate | ✅ Excellent | ✅ Excellent |
+| **Time-Series Optimization** | ❌ No | ⚠️ Partial | ⚠️ Possible, not ideal | ✅ Yes | ✅ Yes |
+| **Horizontal Scalability** | ❌ No | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes (Enterprise only) |
+| **Grafana Integration** | ⚠️ Indirect | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
+| **Kafka Integration** | ❌ No | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
+| **Ideal Use Case** | Local data analysis | Large-scale dashboards | High write availability | IoT/Financial TS data | TS data with full SQL |
+| **Deployment** | Easiest | Easy | Medium (need nodes and some config for time serie optimization) | Very easy | Easy (some config for production optimization) |
+| **API - Tools** | DuckDB-Wasm Pandas direct integration | Data lakes integrations Kafka S3 / GCS / HDFS BI: Superset, Power BI, Grafana | **Kafka**, **Spark**, **Flink**BI tools (indirect): via **Trino/Presto**, **Spark SQL** Monitoring: **Grafana**, **Prometheus**, **OpsCenter** | [Grafana-native plugin](https://questdb.io/docs/third-party-tools/grafana/) [Webview](https://demo.questdb.io/index.html) API REST for bulk imports and exports | Telegraf, Kafka Connect, Prometheus, Timescale Forge **Data ingestion**: REST, MQTT (indirecto), ingestion through COPY/INSERT/Batch Multinode clustering |
