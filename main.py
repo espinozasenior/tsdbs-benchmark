@@ -13,6 +13,8 @@ from datetime import datetime, timedelta
 from sqlalchemy import create_engine, text, inspect
 from sqlalchemy.schema import Table, MetaData, Column
 from sqlalchemy.types import Integer, TIMESTAMP, Float, String
+import psycopg2
+from psycopg2.extras import execute_values
 
 # --- Configuration ---
 NUM_RECORDS = 10_000_000  # Number of records to generate
@@ -29,6 +31,12 @@ STARROCKS_PASSWORD = ''
 STARROCKS_DB = 'example_db'
 CASSANDRA_KEYSPACE = 'iot_benchmark'
 CASSANDRA_HOSTS = ['127.0.0.1']
+TIMESCALE_TABLE_NAME = 'benchmark_table_timescaledb'
+TIMESCALE_HOST = '127.0.0.1'
+TIMESCALE_PORT = 5432
+TIMESCALE_USER = 'postgres' # Or your specific user
+TIMESCALE_PASSWORD = 'password' # Or your specific password
+TIMESCALE_DB = 'iot_benchmark_ts'
 
 # --- Data Generation ---
 def generate_data(num_records):
@@ -340,6 +348,133 @@ def query_starrocks(engine):
     print("StarRocks querying complete.")
     return results
 
+# --- TimescaleDB Functions ---
+def setup_timescaledb():
+    print("Setting up TimescaleDB...")
+    conn_args_db_creation = {
+        "host": TIMESCALE_HOST,
+        "port": TIMESCALE_PORT,
+        "user": TIMESCALE_USER,
+        "password": TIMESCALE_PASSWORD,
+        "database": "postgres"  # Connect to default db to create the target db
+    }
+    conn_args_table_creation = {
+        "host": TIMESCALE_HOST,
+        "port": TIMESCALE_PORT,
+        "user": TIMESCALE_USER,
+        "password": TIMESCALE_PASSWORD,
+        "database": TIMESCALE_DB
+    }
+
+    try:
+        # Create database if it doesn't exist
+        conn_db = psycopg2.connect(**conn_args_db_creation)
+        conn_db.autocommit = True
+        cur_db = conn_db.cursor()
+        cur_db.execute(f"SELECT 1 FROM pg_database WHERE datname = '{TIMESCALE_DB}'")
+        if not cur_db.fetchone():
+            cur_db.execute(f"CREATE DATABASE {TIMESCALE_DB}")
+            print(f"Database '{TIMESCALE_DB}' created.")
+        else:
+            print(f"Database '{TIMESCALE_DB}' already exists.")
+        cur_db.close()
+        conn_db.close()
+    except Exception as e:
+        print(f"Error during TimescaleDB database creation: {e}")
+        raise
+
+    try:
+        conn = psycopg2.connect(**conn_args_table_creation)
+        cur = conn.cursor()
+        cur.execute(f"DROP TABLE IF EXISTS {TIMESCALE_TABLE_NAME} CASCADE") # CASCADE to drop dependent objects like hypertables
+        cur.execute(f"""
+            CREATE TABLE {TIMESCALE_TABLE_NAME} (
+                id INTEGER,
+                ts TIMESTAMPTZ NOT NULL,
+                value1 DOUBLE PRECISION,
+                value2 TEXT
+            )
+        """)
+        # Create hypertable
+        cur.execute(f"SELECT create_hypertable('{TIMESCALE_TABLE_NAME}', 'ts', if_not_exists => TRUE)")
+        conn.commit()
+        print(f"TimescaleDB setup complete. Table '{TIMESCALE_TABLE_NAME}' created and converted to hypertable.")
+    except Exception as e:
+        print(f"Error setting up TimescaleDB table: {e}")
+        if 'conn' in locals() and conn:
+            conn.rollback()
+        raise
+    finally:
+        if 'cur' in locals() and cur:
+            cur.close()
+        if 'conn' in locals() and conn:
+            conn.close()
+    return conn_args_table_creation
+
+def load_data_timescaledb(conn_args, df):
+    print(f"Loading data into TimescaleDB table {TIMESCALE_TABLE_NAME}...")
+    start_time = time.time()
+    conn = None
+    try:
+        conn = psycopg2.connect(**conn_args)
+        cur = conn.cursor()
+        # Prepare data for execute_values: list of tuples
+        data_tuples = [tuple(x) for x in df[['id', 'ts', 'value1', 'value2']].to_numpy()]
+        execute_values(cur, f"INSERT INTO {TIMESCALE_TABLE_NAME} (id, ts, value1, value2) VALUES %s", data_tuples, page_size=1000)
+        conn.commit()
+    except Exception as e:
+        print(f"Error loading data into TimescaleDB: {e}")
+        if conn:
+            conn.rollback()
+        raise
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+    end_time = time.time()
+    load_time = end_time - start_time
+    print(f"TimescaleDB data loading complete. Time taken: {load_time:.2f} seconds.")
+    return load_time
+
+def query_timescaledb(conn_args):
+    print("Querying TimescaleDB...")
+    queries = {
+        "count_all": f"SELECT COUNT(*) FROM {TIMESCALE_TABLE_NAME}",
+        "avg_value1": f"SELECT AVG(value1) FROM {TIMESCALE_TABLE_NAME}",
+        "filter_and_count": f"SELECT COUNT(*) FROM {TIMESCALE_TABLE_NAME} WHERE value1 > 50 AND value2 = 'category_A'",
+        "group_by_value2": f"SELECT value2, AVG(value1) FROM {TIMESCALE_TABLE_NAME} GROUP BY value2",
+        "time_window_query": f"SELECT COUNT(*) FROM {TIMESCALE_TABLE_NAME} WHERE ts >= '2023-01-01 00:00:00+00' AND ts < '2023-01-01 01:00:00+00'"
+    }
+    results = {}
+    conn = None
+    try:
+        conn = psycopg2.connect(**conn_args)
+        cur = conn.cursor()
+        for name, query_sql in queries.items():
+            print(f"  Executing query '{name}': {query_sql}")
+            start_query_time = time.time()
+            try:
+                cur.execute(query_sql)
+                result = cur.fetchall()
+                # print(f"    Result: {result}") # Optional
+            except Exception as e:
+                print(f"    Error executing query '{name}': {e}")
+                result = None
+            end_query_time = time.time()
+            results[name] = end_query_time - start_query_time
+            print(f"    Query '{name}' time: {results[name]:.4f} seconds.")
+    except Exception as e:
+        print(f"Error during TimescaleDB querying: {e}")
+        raise
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+    print("TimescaleDB querying complete.")
+    return results
+
 # --- Cassandra Functions --- (New Section)
 def setup_cassandra():
     print("Setting up Cassandra...")
@@ -426,6 +561,21 @@ def main():
     # Generate data
     data_df = generate_data(NUM_RECORDS)
 
+    # --- TimescaleDB Benchmark ---
+    print("\n--- Starting TimescaleDB Benchmark ---")
+    timescaledb_conn_args = None
+    timescaledb_load_time = float('nan')
+    timescaledb_query_times = {}
+    try:
+        timescaledb_conn_args = setup_timescaledb()
+        timescaledb_load_time = load_data_timescaledb(timescaledb_conn_args, data_df.copy())
+        print("Waiting a few seconds for TimescaleDB to process data before querying...")
+        time.sleep(2) # TimescaleDB is usually fast, but a small delay can be safe
+        timescaledb_query_times = query_timescaledb(timescaledb_conn_args)
+    except Exception as e:
+        print(f"TimescaleDB benchmark failed: {e}")
+    # No explicit close here as connections are managed within functions
+
     # --- Cassandra Benchmark --- (New Section)
     print("\n--- Starting Cassandra Benchmark ---")
     cassandra_session = None
@@ -502,11 +652,12 @@ def main():
     print("\nLoad Times:")
     print(f"  DuckDB: {duckdb_load_time:.2f} seconds")
     print(f"  QuestDB: {questdb_load_time:.2f} seconds")
-    print(f"  StarRocks: {starrocks_load_time:.2f} seconds") # New
-    print(f"  Cassandra: {cassandra_load_time:.2f} seconds") # New
+    print(f"  StarRocks: {starrocks_load_time:.2f} seconds")
+    print(f"  Cassandra: {cassandra_load_time:.2f} seconds")
+    print(f"  TimescaleDB: {timescaledb_load_time:.2f} seconds")
 
     print("\nQuery Times (seconds):")
-    header = f"{'Query':<20} | {'DuckDB':<10} | {'QuestDB':<10} | {'StarRocks':<10} | {'Cassandra':<10}" # New
+    header = f"{'Query':<20} | {'DuckDB':<10} | {'QuestDB':<10} | {'StarRocks':<10} | {'Cassandra':<10} | {'TimescaleDB':<12}"
     print(header)
     print("-" * len(header))
 
@@ -523,7 +674,8 @@ def main():
         q_time = questdb_query_times.get(name, float('nan'))
         s_time = starrocks_query_times.get(name, float('nan'))
         c_time = cassandra_query_times.get(name, float('nan'))
-        print(f"{name:<20} | {d_time:<10.4f} | {q_time:<10.4f} | {s_time:<10.4f} | {c_time:<10.4f}") # New
+        t_time = timescaledb_query_times.get(name, float('nan'))
+        print(f"{name:<20} | {d_time:<10.4f} | {q_time:<10.4f} | {s_time:<10.4f} | {c_time:<10.4f} | {t_time:<12.4f}")
 
     print("\nBenchmark finished.")
 
