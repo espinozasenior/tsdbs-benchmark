@@ -1,28 +1,34 @@
 import duckdb
 from questdb.ingress import Sender, TimestampNanos
+from cassandra.cluster import Cluster
+from cassandra.query import BatchStatement, SimpleStatement
+from cassandra.io.libevreactor import LibevConnection
 import random
 import uuid
 import pandas as pd
 import time
 import random
-import requests # Added import for requests library
+import requests
 from datetime import datetime, timedelta
 from sqlalchemy import create_engine, text, inspect
 from sqlalchemy.schema import Table, MetaData, Column
-from sqlalchemy.types import Integer, TIMESTAMP, Float, String # Changed from Double to Float for broader compatibility
+from sqlalchemy.types import Integer, TIMESTAMP, Float, String
 
 # --- Configuration ---
 NUM_RECORDS = 10_000_000  # Number of records to generate
 DUCKDB_TABLE_NAME = 'benchmark_table_duckdb'
 QUESTDB_TABLE_NAME = 'benchmark_table_questdb'
-STARROCKS_TABLE_NAME = 'benchmark_table_starrocks' # New
+STARROCKS_TABLE_NAME = 'benchmark_table_starrocks'
+CASSANDRA_TABLE_NAME = 'benchmark_table_cassandra'
 QUESTDB_HOST = '127.0.0.1'
-QUESTDB_ILP_PORT = 9009 # Default ILP port for QuestDB, check your QuestDB config
-STARROCKS_HOST = '127.0.0.1' # New, updated hostname
-STARROCKS_PORT = 9030 # New - MySQL protocol port for SQLAlchemy
-STARROCKS_USER = 'root' # New - Default StarRocks user
-STARROCKS_PASSWORD = '' # New - Default StarRocks password (often empty for local dev)
-STARROCKS_DB = 'example_db' # New - As per StarRocks quick start guide, e.g., 'example_db'
+QUESTDB_ILP_PORT = 9009
+STARROCKS_HOST = '127.0.0.1'
+STARROCKS_PORT = 9030
+STARROCKS_USER = 'root'
+STARROCKS_PASSWORD = ''
+STARROCKS_DB = 'example_db'
+CASSANDRA_KEYSPACE = 'iot_benchmark'
+CASSANDRA_HOSTS = ['127.0.0.1']
 
 # --- Data Generation ---
 def generate_data(num_records):
@@ -334,12 +340,113 @@ def query_starrocks(engine):
     print("StarRocks querying complete.")
     return results
 
-# --- Main Execution ---
+# --- Cassandra Functions --- (New Section)
+def setup_cassandra():
+    print("Setting up Cassandra...")
+    try:
+        cluster = Cluster(CASSANDRA_HOSTS)
+        session = cluster.connect()
+        session.execute(f"""
+            CREATE KEYSPACE IF NOT EXISTS {CASSANDRA_KEYSPACE}
+            WITH REPLICATION = {{ 'class' : 'SimpleStrategy', 'replication_factor' : 1 }}
+        """)
+        session.set_keyspace(CASSANDRA_KEYSPACE)
+        session.execute(f"DROP TABLE IF EXISTS {CASSANDRA_TABLE_NAME}")
+        session.execute(f"""
+            CREATE TABLE {CASSANDRA_TABLE_NAME} (
+                id INT PRIMARY KEY,
+                ts TIMESTAMP,
+                value1 DOUBLE,
+                value2 TEXT
+            )
+        """)
+        print(f"Cassandra setup complete. Keyspace '{CASSANDRA_KEYSPACE}' and table '{CASSANDRA_TABLE_NAME}' are ready.")
+        return session, cluster
+    except Exception as e:
+        print(f"Error setting up Cassandra: {e}")
+        raise
+
+def load_data_cassandra(session, df):
+    print(f"Loading data into Cassandra table {CASSANDRA_TABLE_NAME}...")
+    start_time = time.time()
+    try:
+        prepared = session.prepare(f"""
+            INSERT INTO {CASSANDRA_TABLE_NAME} (id, ts, value1, value2)
+            VALUES (?, ?, ?, ?)
+        """)
+        batch = BatchStatement()
+        batch_size = 300 # Adjust batch size as needed (failed me with higher value)
+        for i, row in df.iterrows():
+            # Ensure 'ts' is a Python datetime object for Cassandra driver
+            timestamp_val = row['ts'].to_pydatetime() if isinstance(row['ts'], pd.Timestamp) else row['ts']
+            batch.add(prepared, (int(row['id']), timestamp_val, float(row['value1']), str(row['value2'])))
+            if (i + 1) % batch_size == 0:
+                session.execute(batch)
+                batch.clear()
+                print(f"  {i + 1}/{len(df)} records sent to Cassandra...")
+        if batch:
+            session.execute(batch) # Send remaining records
+    except Exception as e:
+        print(f"Error loading data into Cassandra: {e}")
+        raise
+    end_time = time.time()
+    load_time = end_time - start_time
+    print(f"Cassandra data loading complete. Time taken: {load_time:.2f} seconds.")
+    return load_time
+
+def query_cassandra(session):
+    print("Querying Cassandra...")
+    queries = {
+        "count_all": f"SELECT COUNT(*) FROM {CASSANDRA_TABLE_NAME}",
+        "avg_value1": f"SELECT AVG(value1) FROM {CASSANDRA_TABLE_NAME}", # Note: AVG might be slow without proper indexing/SAI
+        "filter_and_count": f"SELECT COUNT(*) FROM {CASSANDRA_TABLE_NAME} WHERE value1 > 50 AND value2 = 'category_A' ALLOW FILTERING",
+        "group_by_value2": f"SELECT value2, AVG(value1) FROM {CASSANDRA_TABLE_NAME} GROUP BY value2 ALLOW FILTERING", # Note: GROUP BY can be resource-intensive
+        "time_window_query": f"SELECT COUNT(*) FROM {CASSANDRA_TABLE_NAME} WHERE ts >= '2023-01-01 00:00:00+0000' AND ts < '2023-01-01 01:00:00+0000' ALLOW FILTERING"
+    }
+    results = {}
+    for name, query_cql in queries.items():
+        print(f"  Executing query '{name}': {query_cql}")
+        start_time = time.time()
+        try:
+            result_set = session.execute(query_cql)
+            # For count queries, result_set.one()[0] gives the count
+            # For other queries, you might iterate through result_set
+            # print(f"    Result: {[row for row in result_set]}") # Optional: print query result
+        except Exception as e:
+            print(f"    Error executing query '{name}': {e}")
+            result_set = None
+        end_time = time.time()
+        results[name] = end_time - start_time
+        print(f"    Query '{name}' time: {results[name]:.4f} seconds.")
+    print("Cassandra querying complete.")
+    return results
+
+
 def main():
     # Generate data
     data_df = generate_data(NUM_RECORDS)
 
-    
+    # --- Cassandra Benchmark --- (New Section)
+    print("\n--- Starting Cassandra Benchmark ---")
+    cassandra_session = None
+    cassandra_cluster = None
+    cassandra_load_time = float('nan')
+    cassandra_query_times = {}
+    try:
+        cassandra_session, cassandra_cluster = setup_cassandra()
+        cassandra_load_time = load_data_cassandra(cassandra_session, data_df.copy())
+        print("Waiting a few seconds for Cassandra to process data before querying...")
+        time.sleep(5) # Optional: wait if needed, though Cassandra writes are typically available quickly
+        cassandra_query_times = query_cassandra(cassandra_session)
+    except Exception as e:
+        print(f"Cassandra benchmark failed: {e}")
+    finally:
+        if cassandra_session:
+            cassandra_session.shutdown()
+        if cassandra_cluster:
+            cassandra_cluster.shutdown()
+            print("Cassandra connection closed.")
+
     # --- QuestDB Benchmark ---
     print("\n--- Starting QuestDB Benchmark ---")
     questdb_load_time = float('nan')
@@ -396,9 +503,10 @@ def main():
     print(f"  DuckDB: {duckdb_load_time:.2f} seconds")
     print(f"  QuestDB: {questdb_load_time:.2f} seconds")
     print(f"  StarRocks: {starrocks_load_time:.2f} seconds") # New
+    print(f"  Cassandra: {cassandra_load_time:.2f} seconds") # New
 
     print("\nQuery Times (seconds):")
-    header = f"{'Query':<20} | {'DuckDB':<10} | {'QuestDB':<10} | {'StarRocks':<10}" # New
+    header = f"{'Query':<20} | {'DuckDB':<10} | {'QuestDB':<10} | {'StarRocks':<10} | {'Cassandra':<10}" # New
     print(header)
     print("-" * len(header))
 
@@ -413,8 +521,9 @@ def main():
     for name in query_names:
         d_time = duckdb_query_times.get(name, float('nan'))
         q_time = questdb_query_times.get(name, float('nan'))
-        s_time = starrocks_query_times.get(name, float('nan')) # New
-        print(f"{name:<20} | {d_time:<10.4f} | {q_time:<10.4f} | {s_time:<10.4f}") # New
+        s_time = starrocks_query_times.get(name, float('nan'))
+        c_time = cassandra_query_times.get(name, float('nan'))
+        print(f"{name:<20} | {d_time:<10.4f} | {q_time:<10.4f} | {s_time:<10.4f} | {c_time:<10.4f}") # New
 
     print("\nBenchmark finished.")
 
