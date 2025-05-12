@@ -135,6 +135,16 @@ We are choosing **QuestDB, DuckDB, Cassandra and StarRocks**. Following the next
 **Amazon type t2.2xlarge: 32 RAM - 8vcpu**
 We have build a **[Python script](https://github.com/espinozasenior/tsdbs-benchmark)** to write and query 10 millions of rows in my local computer to test how complex is the installation, connection and query building.
 
+**First try** ⏲
+
+<img width="632" alt="image-20250512-210259" src="https://github.com/user-attachments/assets/30788cf7-4c72-4bd6-9f49-9064923fa91a" />
+
+
+**Second try** ⏲
+
+<img width="641" alt="image" src="https://github.com/user-attachments/assets/7f51c7b7-82e9-4a55-b9a8-5391b79e1e43" />
+
+
 ## 🔄 Comparative: DuckDB, StarRocks, Cassandra, QuestDB, TimescaleDB
 
 | **Criteria** | **DuckDB** | **StarRocks** | **Cassandra** | **QuestDB** | **TimescaleDB** |
