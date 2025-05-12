@@ -14,7 +14,7 @@ https://questdb.com/blog/2024/02/26/questdb-versus-influxdb/
 
 **Docker deployment**
 
-```json
+```bash
 docker run -p 9000:9000 \
  -p 9009:9009 \
  -p 8812:8812 \
@@ -33,6 +33,20 @@ brew services start questdb
 ```
 
 ## Cassandra
+Apache Cassandra is a highly scalable, fault-tolerant, partitioned, distributed, multi-model database designed to handle large amounts of structured and semi-structured data across many commodity servers.
+
+https://github.com/apache/cassandra
+https://github.com/Anant/awesome-cassandra
+https://cassandra.link/post/advanced-time-series-with-cassandra
+https://cassandra.link/post/apache-cassandra-data-partitioning
+https://www.timescale.com/blog/cassandra-vs-timescaledb
+https://www.ksolves.com/blog/big-data/optimizing-cassandra-for-time-series-data
+
+**Docker deployment**
+```bash
+docker run --name cassandra -d -e CASSANDRA_BROADCAST_ADDRESS=127.0.0.1 -p 9042:9042 cassandra:latest
+```
+
 
 # OLAP
 
@@ -111,11 +125,23 @@ We have build a **[Python script](https://github.com/espinozasenior/tsdbs-benchm
 
 ![image.png](attachment:e755a6e1-43fd-4591-86bd-e2d5a7ac194a:image.png)
 
-| **Database** | **Type** | **API - Tools - Access Methods** | **Language** | **Queries** | **Distributed system compatibility** | **Deployment** |  |
-| --- | --- | --- | --- | --- | --- | --- | --- |
+| **Database** | **Type** | **API - Tools - Access Methods** | **Language** | **Queries** | **Distributed system compatibility** | **Deployment** | **Horizontal Scalability** | **Real-time reads** | **Real-time writes** |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | **QuestDB** | Time Series DBMS | [Grafana-native plugin](https://questdb.io/docs/third-party-tools/grafana/)
 [Webview](https://demo.questdb.io/index.html)
-API REST for bulk imports and exports | Java (low latency, zero-GC), C++ | SQL | Good with Kafka, Flink, Spark | EASY |  |
-| **InfluxDB** | Time Series DBMS | HTTP API (including InfluxDB Line Protocol), JSON over UDP | Go | InfluxQL Flux |  | N/A |  |
-| **DuckDB** |  |  |  | SQL |  | VERY EASY |  |
-| **StarRocks** |  |  |  | SQL (MYSQL connector) |  | EASY |  |
+API REST for bulk imports and exports | Java (low latency, zero-GC), C++ | SQL | Good with Kafka, Flink, Spark | EASY | YES (high ingestion, single-node or cluster) | Excelent low-latency |  |
+| **InfluxDB** | Time Series DBMS | HTTP API (including InfluxDB Line Protocol), JSON over UDP | Go | InfluxQL Flux | Good with Kafka, Flink, Spark, Prometeo, Grafana | N/A |  |  |  |
+| **DuckDB** | OLAP embbebided  | DuckDB-Wasm
+Pandas direct integration
+ | C++ | SQL | Not Sure | VERY EASY | NO (local) | Very fast |  |
+| **StarRocks** | OLAP (Apache Doris fork) distributed | Data lakes integrations
+
+Kafka
+S3 / GCS / HDFS
+
+BI: Superset, Power BI, Grafana | C++
+Java | SQL (MYSQL connector) vectorized | Good | EASY | YES | Very fast |  |
+| **Cassandra** | 
+General - Popular for Time Series | SDK | Java | CQL | Good for distributed systems, disponibility and fault-tolerance approach  | MEDIUM
+
+(need nodes and some config for time serie optimization) | YES (Very high) | Medium |  |
